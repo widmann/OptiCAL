@@ -1,4 +1,4 @@
-% OptiCAL - Psychtool box IOPort interface to the CRS OptiCAL luminance
+% OptiCAL - Psychtoolbox IOPort interface to the CRS OptiCAL luminance
 %           meter device
 %
 % Usage:

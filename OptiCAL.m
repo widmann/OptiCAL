@@ -5,8 +5,10 @@
 %   >> handle = OptiCAL('Open', port)
 %   >> lum = OptiCAL('Read', handle)
 %   >> OptiCAL('Close', handle)
+%   >> OptiCAL('CloseAll')
 %
 % Inputs:
+%   command   - string 'Open', 'Read', 'Close', or 'CloseAll'
 %   port      - string device (e.g. '/dev/ttyS0')
 %   handle    - double handle
 %
@@ -34,47 +36,108 @@
 
 % Copyright (C) 2012 Andreas Widmann, University of Leipzig, widmann@uni-leipzig.de
 %
-% This program is free software; you can redistribute it and/or modify it
-% under the terms of the GNU General Public License as published by the
-% Free Software Foundation; either version 2 of the License, or (at your
-% option) any later version.
-%
-% This program is distributed in the hope that it will be useful, but
-% WITHOUT ANY WARRANTY; without even the implied warranty of
-% MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General
-% Public License for more details.
-%
-% You should have received a copy of the GNU General Public License along
-% with this program; if not, write to the Free Software Foundation, Inc.,
-% 59 Temple Place, Suite 330, Boston, MA  02111-1307, USA
+% MIT license:
+% 
+% Permission is hereby granted, free of charge, to any person obtaining a
+% copy of this software and associated documentation files (the
+% "Software"), to deal in the Software without restriction, including
+% without limitation the rights to use, copy, modify, merge, publish,
+% distribute, sublicense, and/or sell copies of the Software, and to permit
+% persons to whom the Software is furnished to do so, subject to the
+% following conditions:
+% 
+% The above copyright notice and this permission notice shall be included
+% in all copies or substantial portions of the Software.
+% 
+% THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+% OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+% MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+% NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+% DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+% OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+% USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 function [ ret ] = OptiCAL(command, handle)
+
+if nargin < 1
+    error('Not enough input arguments.')
+end
 
 persistent OptiCALCfg;
 
 switch command
 
     case 'Open'
-        handle = OptiCALOpen(handle);
-        OptiCALCfg = OptiCALConfiguration(handle);
+
+        if nargin < 2
+            error('Not enough input arguments.')
+        end
+
+        % Open device
+        port = handle;
+        handle = OptiCALOpen(port);
+
+        % Define configuration structure
+        OptiCALCfg = [OptiCALCfg OptiCALConfiguration(handle)];
+
         ret = handle;
 
-    case 'Close'
-        OptiCALClose(handle);
+    case {'Close', 'CloseAll'}
+        
+        if nargin < 2 || isempty(handle) || strcmp(command, 'CloseAll')
+ 
+            % Close all devices if used without handle argument or requested CloseAll        
+            while ~isempty(OptiCALCfg)
+               OptiCALClose(OptiCALCfg(1).handle);
+               OptiCALCfg(1) = [];
+            end
+
+        else
+            
+            % Close handle
+            idx = [];
+            if ~isempty(OptiCALCfg)
+                idx = find([OptiCALCfg.handle] == handle);
+            end
+            if isempty(idx)
+                error('Invalid OptiCAL device handle.')
+            end
+            
+            OptiCALClose(OptiCALCfg(idx).handle);
+            OptiCALCfg(idx) = [];
+ 
+        end
 
     case 'Read'
-        adc = OptiCALRead(handle);
+
+        if nargin < 2 || isempty(handle)
+            error('Not enough input arguments.')
+        end
+
+        idx = [];
+        if ~isempty(OptiCALCfg)
+            idx = find([OptiCALCfg.handle] == handle);
+        end
+        if isempty(idx)
+            error('Invalid OptiCAL device handle.')
+        end
+
+        % Read raw value
+        adc = OptiCALRead(OptiCALCfg(idx).handle);
 
         % Convert to luminance
-        adc_adj = adc - OptiCALCfg.Z_count - 524288; % From OptiCAL manual
-        lum = ((adc_adj / 524288) * OptiCALCfg.V_ref * 1e-6) / (OptiCALCfg.R_feed * OptiCALCfg.K_cal * 1e-15); % From pyoptical! See errata!!!
+        adc_adj = adc - OptiCALCfg(idx).Z_count - 524288; % From OptiCAL manual
+        lum = ((adc_adj / 524288) * OptiCALCfg(idx).V_ref * 1e-6) / (OptiCALCfg(idx).R_feed * OptiCALCfg(idx).K_cal * 1e-15); % From pyoptical! See errata!!!
         ret = max([0 lum]);
 
-end
+    otherwise
+        error('Unknown command.')
 
 end
 
-function [handle, OptiCALCfg] = OptiCALOpen(port)
+end
+
+function handle = OptiCALOpen(port)
 
     % Open serial port
     OptiCALCfg.port = port;
@@ -84,12 +147,18 @@ function [handle, OptiCALCfg] = OptiCALOpen(port)
     % Calibrate
     IOPort('Write', handle, 'C');
     data = IOPort('Read', handle, 1, 1);
-    if isempty(data) || data ~= 6, error('Could not calibrate OptiCAL device.'), end
+    if isempty(data) || data ~= 6
+        IOPort('Close', handle);
+        error('Could not calibrate OptiCAL device.')
+    end
 
     % Set in current Mode
     IOPort('Write', handle, 'I');
     data = IOPort('Read', handle, 1, 1);
-    if isempty(data) || data ~= 6, error('Could not set OptiCAL device into current mode.'), end
+    if isempty(data) || data ~= 6
+        IOPort('Close', handle);
+        error('Could not set OptiCAL device into current mode.')
+    end
 
 end
 
@@ -100,6 +169,9 @@ function OptiCALClose(handle)
 end
 
 function OptiCALCfg = OptiCALConfiguration(handle)
+
+    % Defaults
+    OptiCALCfg.handle = handle;
 
     % Read configuration
     OptiCALCfg.prod_type  = OptiCALReadEEPROM(handle,  0,  2, 'int');
